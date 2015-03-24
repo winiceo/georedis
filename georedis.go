@@ -103,7 +103,18 @@ func SearchByRadius(client *redis.Client, bucketName string, lat, lon, radius fl
 		return []string{}, err
 	}
 
-	return queryByRanges(client, bucketName, ranges)
+	return queryByRanges(client, bucketName, ranges, lat, lon, bitDepth)
+}
+
+// SearchByRadiusWithLimit returns all keys which are in a certain range from the provided lat & lon coordinates and returns only the first "limit" items
+func SearchByRadiusWithLimit(client *redis.Client, bucketName string, lat, lon, radius float64, bitDepth uint8, limit int) ([]string, error) {
+	radiusBitDepth := rangeDepth(radius)
+	ranges, err := getQueryRangesFromBitDepth(lat, lon, radiusBitDepth, bitDepth)
+	if err != nil {
+		return []string{}, err
+	}
+
+	return queryByRangesWithLimit(client, bucketName, ranges, lat, lon, bitDepth, limit)
 }
 
 type uint64Slice []uint64
@@ -150,11 +161,11 @@ func getQueryRangesFromBitDepth(lat, lon float64, radiusBitDepth, bitDepth uint8
 	return ranges, nil
 }
 
-func queryByRanges(client *redis.Client, bucketName string, ranges []geoRange) ([]string, error) {
-	results := []string{}
+func queryByRanges(client *redis.Client, bucketName string, ranges []geoRange, lat, lon float64, depth uint8) ([]string, error) {
+	var results []redis.Z
 
 	for key := range ranges {
-		res, err := client.ZRangeByScore(
+		res, err := client.ZRangeByScoreWithScores(
 			bucketName,
 			redis.ZRangeByScore{
 				Min: fmt.Sprintf("%f", ranges[key].Lower),
@@ -166,7 +177,29 @@ func queryByRanges(client *redis.Client, bucketName string, ranges []geoRange) (
 		}
 	}
 
-	return results, nil
+	return sortResults(lat, lon, depth, results, -1), nil
+}
+
+func queryByRangesWithLimit(client *redis.Client, bucketName string, ranges []geoRange, lat, lon float64, depth uint8, limit int) ([]string, error) {
+	var results []redis.Z
+
+	limit64 := int64(limit)
+
+	for key := range ranges {
+		res, err := client.ZRangeByScoreWithScores(
+		bucketName,
+		redis.ZRangeByScore{
+			Min: fmt.Sprintf("%f", ranges[key].Lower),
+			Max: fmt.Sprintf("%f", ranges[key].Upper),
+			Count: limit64,
+		},
+		).Result()
+		if err == nil {
+			results = append(results, res...)
+		}
+	}
+
+	return sortResults(lat, lon, depth, results, limit), nil
 }
 
 func uniqueInSlice(slice []uint64) []uint64 {
@@ -186,4 +219,42 @@ func uniqueInSlice(slice []uint64) []uint64 {
 
 func leftShift(x float64, shift uint8) float64 {
 	return x * math.Pow(2, float64(shift))
+}
+
+type (
+	labelWithDistance struct{
+		Label string
+		Distance float64
+	}
+	labelsWithDistance []labelWithDistance
+)
+
+func (l labelsWithDistance) Len() int      { return len(l) }
+func (l labelsWithDistance) Swap(i, j int) { l[i], l[j] = l[j], l[i] }
+func (l labelsWithDistance) Less(i, j int) bool { return l[i].Distance < l[j].Distance }
+
+func sortResults(lat, lon float64, depth uint8, points []redis.Z, limit int) []string {
+	if limit == -1 {
+		limit = len(points)
+	} else if limit > len(points) {
+		limit = len(points)
+	}
+
+	results := make([]labelWithDistance, limit)
+	for idx := range points {
+		pointLat, pointLon, _, _ := geohash.DecodeInt(uint64(points[idx].Score), depth)
+		results[idx] = labelWithDistance{
+			Label: points[idx].Member,
+			Distance: geohash.DistanceBetweenPoints(lat, lon, pointLat, pointLon),
+		}
+	}
+
+	sort.Sort(labelsWithDistance(results))
+
+	asString := make([]string, limit)
+	for i:=0; i<limit; i++ {
+		asString[i] = results[i].Label
+	}
+
+	return asString
 }
