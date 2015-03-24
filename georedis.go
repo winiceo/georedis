@@ -17,6 +17,7 @@ import (
 )
 
 type (
+	// GeoKey provides support for encoding a location with a label and coordinates
 	GeoKey struct {
 		Lat   float64
 		Lon   float64
@@ -57,7 +58,7 @@ var (
 		23: 4849600,  //6
 		24: 10018863, //4
 	}
-	rangeIndexLen uint8 = uint8(len(rangeIndex))
+	rangeIndexLen = uint8(len(rangeIndex))
 )
 
 func rangeDepth(radius float64) uint8 {
@@ -71,7 +72,7 @@ func rangeDepth(radius float64) uint8 {
 	return 2
 }
 
-// Add coordinates to the set
+// AddCoordinates adds coordinates to the set
 func AddCoordinates(client *redis.Client, bucketName string, bitDepth uint8, coordinates ...GeoKey) (int64, error) {
 	encodedCoordinates := make([]redis.Z, len(coordinates))
 
@@ -90,7 +91,7 @@ func AddCoordinates(client *redis.Client, bucketName string, bitDepth uint8, coo
 	return client.ZAdd(bucketName, encodedCoordinates...).Result()
 }
 
-// Remove coordinates from the set
+// RemoveCoordinatesByKeys removes coordinates from the set
 func RemoveCoordinatesByKeys(client *redis.Client, bucketName string, coordinatesKeys ...string) (int64, error) {
 	return client.ZRem(bucketName, coordinatesKeys...).Result()
 }
@@ -187,12 +188,12 @@ func queryByRangesWithLimit(client *redis.Client, bucketName string, ranges []ge
 
 	for key := range ranges {
 		res, err := client.ZRangeByScoreWithScores(
-		bucketName,
-		redis.ZRangeByScore{
-			Min: fmt.Sprintf("%f", ranges[key].Lower),
-			Max: fmt.Sprintf("%f", ranges[key].Upper),
-			Count: limit64,
-		},
+			bucketName,
+			redis.ZRangeByScore{
+				Min:   fmt.Sprintf("%f", ranges[key].Lower),
+				Max:   fmt.Sprintf("%f", ranges[key].Upper),
+				Count: limit64,
+			},
 		).Result()
 		if err == nil {
 			results = append(results, res...)
@@ -222,15 +223,15 @@ func leftShift(x float64, shift uint8) float64 {
 }
 
 type (
-	labelWithDistance struct{
-		Label string
+	labelWithDistance struct {
+		Label    string
 		Distance float64
 	}
 	labelsWithDistance []labelWithDistance
 )
 
-func (l labelsWithDistance) Len() int      { return len(l) }
-func (l labelsWithDistance) Swap(i, j int) { l[i], l[j] = l[j], l[i] }
+func (l labelsWithDistance) Len() int           { return len(l) }
+func (l labelsWithDistance) Swap(i, j int)      { l[i], l[j] = l[j], l[i] }
 func (l labelsWithDistance) Less(i, j int) bool { return l[i].Distance < l[j].Distance }
 
 func sortResults(lat, lon float64, depth uint8, points []redis.Z, limit int) []string {
@@ -244,7 +245,7 @@ func sortResults(lat, lon float64, depth uint8, points []redis.Z, limit int) []s
 	for idx := range points {
 		pointLat, pointLon, _, _ := geohash.DecodeInt(uint64(points[idx].Score), depth)
 		results[idx] = labelWithDistance{
-			Label: points[idx].Member,
+			Label:    points[idx].Member,
 			Distance: geohash.DistanceBetweenPoints(lat, lon, pointLat, pointLon),
 		}
 	}
@@ -252,7 +253,7 @@ func sortResults(lat, lon float64, depth uint8, points []redis.Z, limit int) []s
 	sort.Sort(labelsWithDistance(results))
 
 	asString := make([]string, limit)
-	for i:=0; i<limit; i++ {
+	for i := 0; i < limit; i++ {
 		asString[i] = results[i].Label
 	}
 
